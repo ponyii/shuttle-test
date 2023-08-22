@@ -1,12 +1,15 @@
+use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
+use chrono::{offset::Local, DateTime};
+use rand::Rng;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use axum::{routing::get, Router, Json, extract::State, http::StatusCode};
-use serde::Deserialize;
-use rand::Rng;
-use chrono::{DateTime, offset::Local};
-use tokio::{task, time::{sleep, Duration}};
-use tracing_subscriber;
+use tokio::{
+    task,
+    time::{sleep, Duration},
+};
 use tracing;
+use tracing_subscriber;
 
 // TODO: validate it
 const SHARD_NUM: usize = 1;
@@ -54,9 +57,7 @@ async fn main() -> Result<(), AppError> {
         }
     });
 
-    let app = Router::new()
-        .route("/fact", get(fact))
-        .with_state(state);
+    let app = Router::new().route("/fact", get(fact)).with_state(state);
 
     axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
         .serve(app.into_make_service())
@@ -86,7 +87,7 @@ struct DogFactBatch {
     success: bool,
 }
 
-// For the sake of simplicity each shard contains all facts from a signle response. 
+// For the sake of simplicity each shard contains all facts from a signle response.
 async fn get_dog_facts(state: &AppState) -> Result<(), AppError> {
     let url = format!("{}{}", DOG_ENDPOINT, SHARD_SIZE);
     let client = reqwest::Client::new();
@@ -98,27 +99,34 @@ async fn get_dog_facts(state: &AppState) -> Result<(), AppError> {
         }
         let batch = validate_dog_fact_batch(response.text().await?)?;
         *state[shard_index].lock().unwrap() = Shard {
-            facts: batch.facts, 
-            timestamp: Some(Local::now())
+            facts: batch.facts,
+            timestamp: Some(Local::now()),
         };
     }
     Ok(())
 }
 
 fn validate_dog_fact_batch(body: String) -> Result<DogFactBatch, AppError> {
-    match serde_json::from_str::<DogFactBatch>(&body) {  // TODO: how safe is it?   
+    match serde_json::from_str::<DogFactBatch>(&body) {
+        // TODO: how safe is it?
         Ok(batch) => {
             if !batch.success {
-                return Err(AppError::InvalidData("The 'success' flag is false".to_string()));
+                return Err(AppError::InvalidData(
+                    "The 'success' flag is false".to_string(),
+                ));
             } else if batch.facts.len() != SHARD_SIZE {
-                return Err(AppError::InvalidData(format!("Unexpected number of facts received: {} instead of {}", batch.facts.len(), SHARD_SIZE)));
+                return Err(AppError::InvalidData(format!(
+                    "Unexpected number of facts received: {} instead of {}",
+                    batch.facts.len(),
+                    SHARD_SIZE
+                )));
             }
             // One may add more data checks here. E.g. it might make sense to exclude
             // too long facts from the batch so as to control the amount of memory
             // used per batch, especially if the fact source can't be trusted.
             Ok(batch)
-        },
-        Err(e) => Err(AppError::JsonParsingError(e))
+        }
+        Err(e) => Err(AppError::JsonParsingError(e)),
     }
 }
 
