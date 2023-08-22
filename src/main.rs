@@ -1,7 +1,7 @@
 use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use chrono::{offset::Local, DateTime};
 use clap::Parser;
-use rand::Rng;
+use rand::seq::SliceRandom;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::{
@@ -39,7 +39,7 @@ pub struct ServerConfig {
 
     /// Animals you are interested in (comma-separated)
     #[arg(long, value_parser, value_delimiter = ',', default_values_t = vec![Animal::Cat, Animal::Dog])]
-    pub animals: Vec<Animal>,  // TODO: deduplicate
+    pub animals: Vec<Animal>, // TODO: deduplicate
 }
 
 #[derive(Default)]
@@ -57,7 +57,7 @@ impl Shard {
     }
 }
 
-struct AnimalShards {
+struct ShardSet {
     animal: Animal,
     // Obviously, `Mutex` is not oblifatory to work with the cached facts.
     // The alternative I find the most natural is the usage of `tokio::sync::watch`
@@ -68,7 +68,7 @@ struct AnimalShards {
 
 #[derive(Clone)]
 struct AppState {
-    cache: Arc<Vec<AnimalShards>>,
+    cache: Arc<Vec<ShardSet>>,
     cfg: ServerConfig,
 }
 
@@ -79,9 +79,15 @@ fn init_state(cfg: ServerConfig) -> AppState {
         for _ in 0..cfg.shard_num {
             shards.push(Mutex::new(Shard::default()));
         }
-        cache.push(AnimalShards{animal: animal.clone(), shards});
+        cache.push(ShardSet {
+            animal: animal.clone(),
+            shards,
+        });
     }
-    AppState{cache: Arc::new(cache), cfg}
+    AppState {
+        cache: Arc::new(cache),
+        cfg,
+    }
 }
 
 #[tokio::main]
@@ -121,16 +127,16 @@ async fn main() -> Result<(), AppError> {
 // this policy allows the server to keep runnig in case a source of facts
 // is temporary unavailable. Naturally, this check could have been performed and
 // a special "no fresh animal facts" error message could have been added.
-async fn fact(State(state): State<AppState>) -> Json<HashMap<String, String>> {
+async fn fact(State(state): State<AppState>) -> Result<Json<HashMap<String, String>>, AppError> {
     let mut rng = rand::thread_rng();
-    let shard_index = rng.gen_range(0..state.cfg.shard_num);
-    let fact_index = rng.gen_range(0..state.cfg.shard_size);
-    let animal_index = rng.gen_range(0..state.cfg.animals.len());
-    let fact = state.cache[animal_index].shards[shard_index].lock().unwrap().facts[fact_index].clone();
-    Json(HashMap::from([
-        ("animal".to_string(), state.cache[animal_index].animal.to_string()),
-        ("fact".to_string(), fact),
-    ]))
+    let shard_set = state.cache.choose(&mut rng).ok_or(AppError::NoData)?;
+    let shard = shard_set.shards.choose(&mut rng).ok_or(AppError::NoData)?;
+    let facts = &shard.lock().unwrap().facts;
+    let result = facts.choose(&mut rng).ok_or(AppError::NoData)?;
+    Ok(Json(HashMap::from([
+        ("animal".to_string(), shard_set.animal.to_string()),
+        ("fact".to_string(), result.clone()),
+    ])))
 }
 
 // For the sake of simplicity each shard contains all facts from a signle response.
@@ -138,17 +144,21 @@ async fn fact(State(state): State<AppState>) -> Json<HashMap<String, String>> {
 // to check response staus codes within this function. Though in future one may move
 // this logic to other functions, only shard filling is essential here.
 async fn get_animal_facts(state: &AppState) -> Result<(), AppError> {
-    for animal_shards in state.cache.as_ref() {
+    for shard_set in state.cache.as_ref() {
         let client = reqwest::Client::new();
-        let url = url(&animal_shards.animal, state.cfg.shard_size);
-        for shard_index in 0..state.cfg.shard_num {
+        let url = url(&shard_set.animal, state.cfg.shard_size);
+        for shard in &shard_set.shards {
             let response = client.get(&url).send().await?;
             match response.status() {
                 StatusCode::OK => (),
                 code => return Err(AppError::UnexpectedStatusCode(code)),
             }
-            let shard = validate_batch(response.text().await?, &animal_shards.animal, state.cfg.shard_size)?;
-            *animal_shards.shards[shard_index].lock().unwrap() = shard;
+            let new_shard = validate_batch(
+                response.text().await?,
+                &shard_set.animal,
+                state.cfg.shard_size,
+            )?;
+            *shard.lock().unwrap() = new_shard;
         }
     }
     Ok(())
