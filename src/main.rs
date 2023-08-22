@@ -45,6 +45,9 @@ pub struct ServerConfig {
 #[derive(Default)]
 pub struct Shard {
     pub facts: Vec<String>,
+    // Initially I planned to use timestamps for health checks:
+    // stale shards indicate problems with data fetching.
+    // But it seems that I don't have time for this feature now.
     pub timestamp: Option<DateTime<Local>>,
 }
 
@@ -59,7 +62,7 @@ impl Shard {
 
 struct ShardSet {
     animal: Animal,
-    // Obviously, `Mutex` is not oblifatory to work with the cached facts.
+    // Obviously, `Mutex` is not oblifatory to work with the cached facts; sharding is also optional.
     // The alternative I find the most natural is the usage of `tokio::sync::watch`
     // with the receivers in the AppState and the producer in the fact-requesting task;
     // however, I don't really feel like dealing with the RW-locks `watch` uses under the hood.
