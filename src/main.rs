@@ -115,7 +115,7 @@ async fn fact(State(state): State<AppState>) -> Result<Json<HashMap<String, Stri
     let mut rng = rand::thread_rng();
     let shard_set = state.cache.choose(&mut rng).ok_or(AppError::NoData)?;
     let shard = shard_set.shards.choose(&mut rng).ok_or(AppError::NoData)?;
-    let facts = &shard.lock().unwrap().facts;
+    let facts = &shard.lock()?.facts;
     let result = facts.choose(&mut rng).ok_or(AppError::NoData)?;
     Ok(Json(HashMap::from([
         ("animal".to_string(), shard_set.animal.to_string()),
@@ -142,7 +142,7 @@ async fn get_animal_facts(state: &AppState) -> Result<(), AppError> {
                 &shard_set.animal,
                 state.cfg.shard_size,
             )?;
-            *shard.lock().unwrap() = new_shard;
+            *shard.lock()? = new_shard;
         }
     }
     Ok(())

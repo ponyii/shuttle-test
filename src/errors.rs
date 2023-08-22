@@ -1,5 +1,8 @@
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use std::sync::{MutexGuard, PoisonError};
+
+use crate::Shard;
 
 #[derive(Debug)]
 pub enum AppError {
@@ -7,13 +10,19 @@ pub enum AppError {
     JsonParsingError(serde_json::Error),
     UnexpectedStatusCode(StatusCode),
     InvalidData(String),
+    PoisonedShard,
     NoData,
-    // TODO: PoisonError
 }
 
 impl From<reqwest::Error> for AppError {
     fn from(value: reqwest::Error) -> Self {
         Self::RequestError(value)
+    }
+}
+
+impl<'a> From<PoisonError<MutexGuard<'a, Shard>>> for AppError {
+    fn from(_: PoisonError<MutexGuard<'a, Shard>>) -> Self {
+        Self::PoisonedShard
     }
 }
 
