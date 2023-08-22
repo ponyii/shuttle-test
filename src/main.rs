@@ -8,39 +8,15 @@ use tokio::{
     task,
     time::{sleep, Duration},
 };
-use tracing;
 use tracing_subscriber;
 
 use animals::{url, validate_batch, Animal};
+use config::ServerConfig;
 use errors::AppError;
 
 pub mod animals;
+pub mod config;
 pub mod errors;
-
-#[derive(Clone, Parser)]
-pub struct ServerConfig {
-    #[arg(short, long, default_value_t = 3000)]
-    pub port: u16,
-
-    /// Number of shards per animal type
-    #[arg(long, default_value_t = 1)]
-    pub shard_num: usize,
-
-    /// Number of animal facts per shard
-    #[arg(long, default_value_t = 50)]
-    pub shard_size: usize, // TODO: validate
-
-    /// Frequency of shard refreshing (sec)
-    #[arg(long, default_value_t = 2)]
-    pub shard_refresh_sec: u64,
-
-    #[arg(short, long, default_value_t = tracing::Level::INFO)]
-    pub verbosity: tracing::Level,
-
-    /// Animals you are interested in (comma-separated)
-    #[arg(long, value_parser, value_delimiter = ',', default_values_t = vec![Animal::Cat, Animal::Dog])]
-    pub animals: Vec<Animal>, // TODO: deduplicate
-}
 
 #[derive(Default)]
 pub struct Shard {
@@ -95,13 +71,18 @@ fn init_state(cfg: ServerConfig) -> AppState {
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
-    let cfg = ServerConfig::parse();
+    let mut cfg = ServerConfig::parse();
+    cfg.deduplicate_animals();
 
     tracing_subscriber::fmt()
         .with_max_level(cfg.verbosity)
         .init();
 
     let state = init_state(cfg);
+    // Though fact providers are allowed to become unavailable as server runs,
+    // it can't start unless they all have responded correctly.
+    // Optionally, one could exclude the species whose fact providers are unavailable,
+    // and keep the server running if at least one species' API responded correctly.
     get_animal_facts(&state).await?;
 
     let state_clone = state.clone();

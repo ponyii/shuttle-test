@@ -7,7 +7,7 @@ use serde::Deserialize;
 use crate::errors::AppError;
 use crate::Shard;
 
-#[derive(Clone, ValueEnum)]
+#[derive(Clone, Copy, ValueEnum)]
 pub enum Animal {
     Dog,
     Cat,
