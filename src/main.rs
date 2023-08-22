@@ -39,7 +39,7 @@ pub struct ServerConfig {
 
     /// Animals you are interested in (comma-separated)
     #[arg(long, value_parser, value_delimiter = ',', default_values_t = vec![Animal::Cat, Animal::Dog])]
-    pub animals: Vec<Animal>,
+    pub animals: Vec<Animal>,  // TODO: deduplicate
 }
 
 #[derive(Default)]
@@ -68,23 +68,20 @@ struct AnimalShards {
 
 #[derive(Clone)]
 struct AppState {
-    cache: Arc<AnimalShards>,
+    cache: Arc<Vec<AnimalShards>>,
     cfg: ServerConfig,
 }
 
 fn init_state(cfg: ServerConfig) -> AppState {
     let mut cache = Vec::with_capacity(cfg.shard_num);
-    for _ in 0..cfg.shard_num {
-        cache.push(Mutex::new(Shard::default()));
+    for animal in &cfg.animals {
+        let mut shards = Vec::with_capacity(cfg.shard_num);
+        for _ in 0..cfg.shard_num {
+            shards.push(Mutex::new(Shard::default()));
+        }
+        cache.push(AnimalShards{animal: animal.clone(), shards});
     }
-    let animal = cfg.animals[0].clone(); // TODO
-    AppState {
-        cache: Arc::new(AnimalShards {
-            animal: animal,
-            shards: cache,
-        }),
-        cfg,
-    }
+    AppState{cache: Arc::new(cache), cfg}
 }
 
 #[tokio::main]
@@ -128,9 +125,10 @@ async fn fact(State(state): State<AppState>) -> Json<HashMap<String, String>> {
     let mut rng = rand::thread_rng();
     let shard_index = rng.gen_range(0..state.cfg.shard_num);
     let fact_index = rng.gen_range(0..state.cfg.shard_size);
-    let fact = state.cache.shards[shard_index].lock().unwrap().facts[fact_index].clone();
+    let animal_index = rng.gen_range(0..state.cfg.animals.len());
+    let fact = state.cache[animal_index].shards[shard_index].lock().unwrap().facts[fact_index].clone();
     Json(HashMap::from([
-        ("animal".to_string(), state.cache.animal.to_string()),
+        ("animal".to_string(), state.cache[animal_index].animal.to_string()),
         ("fact".to_string(), fact),
     ]))
 }
@@ -140,17 +138,18 @@ async fn fact(State(state): State<AppState>) -> Json<HashMap<String, String>> {
 // to check response staus codes within this function. Though in future one may move
 // this logic to other functions, only shard filling is essential here.
 async fn get_animal_facts(state: &AppState) -> Result<(), AppError> {
-    let animal = &state.cache.animal;
-    let client = reqwest::Client::new();
-    let url = url(animal, state.cfg.shard_size);
-    for shard_index in 0..state.cfg.shard_num {
-        let response = client.get(&url).send().await?;
-        match response.status() {
-            StatusCode::OK => (),
-            code => return Err(AppError::UnexpectedStatusCode(code)),
+    for animal_shards in state.cache.as_ref() {
+        let client = reqwest::Client::new();
+        let url = url(&animal_shards.animal, state.cfg.shard_size);
+        for shard_index in 0..state.cfg.shard_num {
+            let response = client.get(&url).send().await?;
+            match response.status() {
+                StatusCode::OK => (),
+                code => return Err(AppError::UnexpectedStatusCode(code)),
+            }
+            let shard = validate_batch(response.text().await?, &animal_shards.animal, state.cfg.shard_size)?;
+            *animal_shards.shards[shard_index].lock().unwrap() = shard;
         }
-        let shard = validate_batch(response.text().await?, animal, state.cfg.shard_size)?;
-        *state.cache.shards[shard_index].lock().unwrap() = shard;
     }
     Ok(())
 }
