@@ -79,7 +79,6 @@ fn validate_dog_facts(body: String, shard_size: usize) -> Result<Shard, AppError
 #[allow(non_snake_case, dead_code)]
 struct CatFact {
     _id: String,
-    __v: u128,
     text: String,
     updatedAt: String,
     deleted: bool,
