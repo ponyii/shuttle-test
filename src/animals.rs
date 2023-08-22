@@ -4,8 +4,9 @@
 use serde::Deserialize;
 
 use crate::errors::AppError;
-use crate::{Shard, SHARD_SIZE};
+use crate::Shard;
 
+#[derive(Clone)]
 pub enum Animal {
     Dog,
     Cat,
@@ -21,23 +22,23 @@ impl ToString for Animal {
     }
 }
 
-pub fn url(animal: &Animal) -> String {
+pub fn url(animal: &Animal, shard_size: usize) -> String {
     match animal {
         Animal::Dog => format!(
             "https://dog-api.kinduff.com/api/facts?number={}",
-            SHARD_SIZE
+            shard_size
         ),
         Animal::Cat => format!(
             "https://cat-fact.herokuapp.com/facts/random?type=cat&amount={}",
-            SHARD_SIZE
+            shard_size
         ),
     }
 }
 
-pub fn validate_batch(body: String, animal: &Animal) -> Result<Shard, AppError> {
+pub fn validate_batch(body: String, animal: &Animal, shard_size: usize) -> Result<Shard, AppError> {
     match animal {
-        Animal::Dog => validate_dog_facts(body),
-        Animal::Cat => validate_cat_facts(body),
+        Animal::Dog => validate_dog_facts(body, shard_size),
+        Animal::Cat => validate_cat_facts(body, shard_size),
     }
 }
 
@@ -47,18 +48,18 @@ struct DogFactBatch {
     success: bool,
 }
 
-fn validate_dog_facts(body: String) -> Result<Shard, AppError> {
+fn validate_dog_facts(body: String, shard_size: usize) -> Result<Shard, AppError> {
     match serde_json::from_str::<DogFactBatch>(&body) {
         Ok(batch) => {
             if !batch.success {
                 return Err(AppError::InvalidData(
                     "The 'success' flag is false".to_string(),
                 ));
-            } else if batch.facts.len() != SHARD_SIZE {
+            } else if batch.facts.len() != shard_size {
                 return Err(AppError::InvalidData(format!(
                     "Unexpected number of dog facts received: {} instead of {}",
                     batch.facts.len(),
-                    SHARD_SIZE
+                    shard_size
                 )));
             }
             // One may add other data checks here. E.g. it might make sense to exclude
@@ -83,14 +84,14 @@ struct CatFact {
     deleted: bool,
 }
 
-fn validate_cat_facts(body: String) -> Result<Shard, AppError> {
+fn validate_cat_facts(body: String, shard_size: usize) -> Result<Shard, AppError> {
     match serde_json::from_str::<Vec<CatFact>>(&body) {
         Ok(batch) => {
-            if batch.len() != SHARD_SIZE {
+            if batch.len() != shard_size {
                 return Err(AppError::InvalidData(format!(
                     "Unexpected number of cat facts received: {} instead of {}",
                     batch.len(),
-                    SHARD_SIZE
+                    shard_size
                 )));
             }
             // One may add other data checks here.

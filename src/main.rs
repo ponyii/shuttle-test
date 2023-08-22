@@ -16,12 +16,15 @@ use errors::AppError;
 pub mod animals;
 pub mod errors;
 
-// TODO: validate it
-const SHARD_NUM: usize = 1;
-const SHARD_SIZE: usize = 10;
-const REFRESH_INTERVAL_SEC: u64 = 2;
-
-const ANIMAL: Animal = Animal::Cat; // TODO: remove me
+#[derive(Clone)]
+pub struct ServerConfig {
+    pub port: u16,
+    pub shard_num: usize,
+    pub shard_size: usize, // TODO: validate
+    pub shard_refresh_sec: u64,
+    pub verbosity: tracing::Level,
+    pub animal: Animal,
+}
 
 #[derive(Default)]
 pub struct Shard {
@@ -47,41 +50,59 @@ struct AnimalShards {
     shards: Vec<Mutex<Shard>>,
 }
 
-type AppState = Arc<AnimalShards>;
+#[derive(Clone)]
+struct AppState {
+    cache: Arc<AnimalShards>,
+    cfg: ServerConfig,
+}
 
-fn init_state() -> AppState {
-    let mut cache = Vec::with_capacity(SHARD_NUM);
-    for _ in 0..SHARD_NUM {
+fn init_state(cfg: ServerConfig) -> AppState {
+    let mut cache = Vec::with_capacity(cfg.shard_num);
+    for _ in 0..cfg.shard_num {
         cache.push(Mutex::new(Shard::default()));
     }
-    Arc::new(AnimalShards {
-        animal: ANIMAL,
-        shards: cache,
-    })
+    AppState {
+        cache: Arc::new(AnimalShards {
+            animal: cfg.animal.clone(),
+            shards: cache,
+        }),
+        cfg,
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
+    let cfg = ServerConfig {
+        port: 3000,
+        shard_num: 2,
+        shard_size: 50,
+        shard_refresh_sec: 2,
+        verbosity: tracing::Level::DEBUG,
+        animal: Animal::Dog,
+    };
+
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_max_level(cfg.verbosity)
         .init();
 
-    let state = init_state();
+    let state = init_state(cfg);
     get_animal_facts(&state).await?;
 
     let state_clone = state.clone();
     task::spawn(async move {
         loop {
-            sleep(Duration::from_secs(REFRESH_INTERVAL_SEC)).await;
+            sleep(Duration::from_secs(state_clone.cfg.shard_refresh_sec)).await;
             if let Err(e) = get_animal_facts(&state_clone).await {
                 eprintln!("Fact fetching error: {:?}", e);
             };
         }
     });
 
+    let socket_addr = format!("0.0.0.0:{}", state.cfg.port)
+        .parse()
+        .expect("Unable to parse socket address");
     let app = Router::new().route("/fact", get(fact)).with_state(state);
-
-    axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
+    axum::Server::bind(&socket_addr)
         .serve(app.into_make_service())
         .await
         .unwrap();
@@ -95,10 +116,11 @@ async fn main() -> Result<(), AppError> {
 // a special "no fresh animal facts" error message could have been added.
 async fn fact(State(state): State<AppState>) -> Json<HashMap<String, String>> {
     let mut rng = rand::thread_rng();
-    let (shard_index, fact_index) = (rng.gen_range(0..SHARD_NUM), rng.gen_range(0..SHARD_SIZE));
-    let fact = state.shards[shard_index].lock().unwrap().facts[fact_index].clone();
+    let shard_index = rng.gen_range(0..state.cfg.shard_num);
+    let fact_index = rng.gen_range(0..state.cfg.shard_size);
+    let fact = state.cache.shards[shard_index].lock().unwrap().facts[fact_index].clone();
     Json(HashMap::from([
-        ("animal".to_string(), state.animal.to_string()),
+        ("animal".to_string(), state.cache.animal.to_string()),
         ("fact".to_string(), fact),
     ]))
 }
@@ -108,17 +130,17 @@ async fn fact(State(state): State<AppState>) -> Json<HashMap<String, String>> {
 // to check response staus codes within this function. Though in future one may move
 // this logic to other functions, only shard filling is essential here.
 async fn get_animal_facts(state: &AppState) -> Result<(), AppError> {
-    let animal = &state.animal;
+    let animal = &state.cache.animal;
     let client = reqwest::Client::new();
-    let url = url(animal);
-    for shard_index in 0..SHARD_NUM {
+    let url = url(animal, state.cfg.shard_size);
+    for shard_index in 0..state.cfg.shard_num {
         let response = client.get(&url).send().await?;
         match response.status() {
             StatusCode::OK => (),
             code => return Err(AppError::UnexpectedStatusCode(code)),
         }
-        let shard = validate_batch(response.text().await?, animal)?;
-        *state.shards[shard_index].lock().unwrap() = shard;
+        let shard = validate_batch(response.text().await?, animal, state.cfg.shard_size)?;
+        *state.cache.shards[shard_index].lock().unwrap() = shard;
     }
     Ok(())
 }
