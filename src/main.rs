@@ -1,5 +1,6 @@
 use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use chrono::{offset::Local, DateTime};
+use clap::Parser;
 use rand::Rng;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -16,14 +17,29 @@ use errors::AppError;
 pub mod animals;
 pub mod errors;
 
-#[derive(Clone)]
+#[derive(Clone, Parser)]
 pub struct ServerConfig {
+    #[arg(short, long, default_value_t = 3000)]
     pub port: u16,
+
+    /// Number of shards per animal type
+    #[arg(long, default_value_t = 1)]
     pub shard_num: usize,
+
+    /// Number of animal facts per shard
+    #[arg(long, default_value_t = 50)]
     pub shard_size: usize, // TODO: validate
+
+    /// Frequency of shard refreshing (sec)
+    #[arg(long, default_value_t = 2)]
     pub shard_refresh_sec: u64,
+
+    #[arg(short, long, default_value_t = tracing::Level::INFO)]
     pub verbosity: tracing::Level,
-    pub animal: Animal,
+
+    /// Animals you are interested in (comma-separated)
+    #[arg(long, value_parser, value_delimiter = ',', default_values_t = vec![Animal::Cat, Animal::Dog])]
+    pub animals: Vec<Animal>,
 }
 
 #[derive(Default)]
@@ -61,9 +77,10 @@ fn init_state(cfg: ServerConfig) -> AppState {
     for _ in 0..cfg.shard_num {
         cache.push(Mutex::new(Shard::default()));
     }
+    let animal = cfg.animals[0].clone(); // TODO
     AppState {
         cache: Arc::new(AnimalShards {
-            animal: cfg.animal.clone(),
+            animal: animal,
             shards: cache,
         }),
         cfg,
@@ -72,14 +89,7 @@ fn init_state(cfg: ServerConfig) -> AppState {
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
-    let cfg = ServerConfig {
-        port: 3000,
-        shard_num: 2,
-        shard_size: 50,
-        shard_refresh_sec: 2,
-        verbosity: tracing::Level::DEBUG,
-        animal: Animal::Dog,
-    };
+    let cfg = ServerConfig::parse();
 
     tracing_subscriber::fmt()
         .with_max_level(cfg.verbosity)

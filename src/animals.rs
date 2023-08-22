@@ -1,12 +1,13 @@
 // This module contains the code requesting facts about different animals,
 // validating the responses, etc.
 
+use clap::ValueEnum;
 use serde::Deserialize;
 
 use crate::errors::AppError;
 use crate::Shard;
 
-#[derive(Clone)]
+#[derive(Clone, ValueEnum)]
 pub enum Animal {
     Dog,
     Cat,
