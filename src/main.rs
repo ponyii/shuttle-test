@@ -155,3 +155,84 @@ async fn get_raw_facts(client: &reqwest::Client, url: &String) -> Result<String,
     };
     Ok(response.text().await?)
 }
+
+// Due to lack of time, I have to limit myself to basic tests.
+// Ideally, fact validators deserve thorough testing as they work with third-party data.
+#[cfg(test)]
+mod test {
+    use crate::*;
+
+    use axum_test::TestServer;
+    use serde::Deserialize;
+    use serde_json::Value;
+    use std::collections::HashSet;
+
+    fn get_test_config(animals: Vec<Animal>) -> ServerConfig {
+        return ServerConfig {
+            port: 3000,
+            shard_num: 2,
+            shard_size: 50,
+            shard_refresh_sec: 2,
+            verbosity: tracing::Level::TRACE,
+            animals,
+        }
+    }
+
+    fn validate_app_state(state: &AppState) {
+        assert_eq!(state.cache.len(), state.cfg.animals.len(), "each animal should have its own shard set");
+        for shard_set in state.cache.as_ref() {
+            assert_eq!(shard_set.shards.len(), state.cfg.shard_num, "incorrect number of shards");
+            for shard in &shard_set.shards {
+                assert_eq!(shard.lock().unwrap().facts.len(), state.cfg.shard_size, "incorrect shard size");
+            }
+        }
+    }
+
+    async fn set_up_test_server(cfg: ServerConfig) -> TestServer {
+        let state = init_state(cfg);
+        get_animal_facts(&state).await.unwrap();
+        validate_app_state(&state);
+        let app = Router::new()
+            .route("/fact", get(fact))
+            .with_state(state)
+            .into_make_service();
+        TestServer::new(app).unwrap()
+    }
+
+    // In fact this struct is not necessary as
+    // `validate_response` has to work anyway with a raw `Value`.
+    #[derive(Deserialize, Debug)]
+    struct RandomFact {
+        fact: String,
+        animal: String,
+    }
+
+    fn validate_response(body: &String, expected_animals: &HashSet<String>) {
+        // Validate expected fields
+        let parsed_response = serde_json::from_str::<RandomFact>(body).unwrap();
+        assert!(expected_animals.contains(&parsed_response.animal), "a response includes incorrect animal: {:?}", parsed_response);
+        // Currrently all we know is that each fact is a string, but further validation can be added later
+        assert!(parsed_response.fact.len() > 0, "a response includes incorrect fact: {:?}", parsed_response);
+
+        // Make sure there are no extra fields.
+        // serde_json seems to simply ignore them, see https://github.com/serde-rs/json/issues/581
+        let value: Value = serde_json::from_str(body).unwrap();
+        let object = value.as_object().unwrap();
+        assert_eq!(object.keys().len(), 2, "a response includes extra fields: {:?}", value);
+    }
+
+    // An alternative to repetitive requests is `rng` mocking.
+    const REQUEST_NUM: u8 = 10;
+
+    #[tokio::test]
+    async fn test_api() {
+        let animals = vec!(Animal::Dog, Animal::Cat);  // TODO: parametrize
+        let animal_set: HashSet<_> = animals.iter().map(|a| a.to_string()).collect();
+        let server = set_up_test_server(get_test_config(animals)).await;
+        for _ in 0..REQUEST_NUM {
+            let response = server.get("/fact").await;
+            assert_eq!(response.status_code(), StatusCode::OK);
+            validate_response(&response.text(), &animal_set);
+        }
+    }
+}
