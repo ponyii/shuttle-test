@@ -26,24 +26,10 @@ cargo build
 ./target/debug/shuttle-test
 ```
 
-Command line arguments:
-```
-$ ./target/debug/shuttle-test --help
-Usage: shuttle-test [OPTIONS]
+Use `./target/debug/shuttle-test --help` to get command line argument list and `cargo test` to run tests.
 
-Options:
-  -p, --port <PORT>
-          [default: 3000]
-      --shard-num <SHARD_NUM>
-          Number of shards per animal type [default: 1]
-      --shard-size <SHARD_SIZE>
-          Number of animal facts per shard [default: 50]
-      --shard-refresh-sec <SHARD_REFRESH_SEC>
-          Frequency of shard refreshing (sec) [default: 2]
-  -v, --verbosity <VERBOSITY>
-          [default: INFO]
-      --animals <ANIMALS>
-          Animals you are interested in (comma-separated) [default: cat dog] [possible values: dog, cat]
-  -h, --help
-          Print help
-```
+
+### API
+
+`GET /fact`: returns a fact about an animal.
+`GET /health`: checks if the server is OK.
