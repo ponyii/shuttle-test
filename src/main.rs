@@ -1,5 +1,6 @@
-use axum::{extract::State, http::StatusCode, http::HeaderMap, routing::get, Json, Router};
-use chrono::{offset::Local, DateTime};
+use axum::{extract::State, http::HeaderMap, http::StatusCode, routing::get, Json, Router};
+use chrono::LocalResult;
+use chrono::{TimeZone, Utc};
 use clap::Parser;
 use rand::seq::SliceRandom;
 use std::collections::HashMap;
@@ -21,17 +22,14 @@ pub mod errors;
 #[derive(Default)]
 pub struct Shard {
     pub facts: Vec<String>,
-    // Initially I planned to use timestamps for health checks:
-    // stale shards indicate problems with data fetching.
-    // But it seems that I don't have time for this feature now.
-    pub timestamp: Option<DateTime<Local>>,
+    pub timestamp: i64,
 }
 
 impl Shard {
     pub fn new(facts: Vec<String>) -> Self {
         Self {
             facts,
-            timestamp: Some(Local::now()),
+            timestamp: Utc::now().timestamp(),
         }
     }
 }
@@ -56,7 +54,7 @@ fn init_state(cfg: ServerConfig) -> AppState {
     for animal in &cfg.animals {
         let mut shards = Vec::with_capacity(cfg.shard_num);
         for _ in 0..cfg.shard_num {
-            shards.push(Mutex::new(Shard::default()));
+            shards.push(Mutex::new(Shard::new(vec![])));
         }
         cache.push(ShardSet {
             animal: animal.clone(),
@@ -154,7 +152,8 @@ fn check_app_state(state: &AppState) -> Result<(), HealthProblem> {
             return Err(HealthProblem::UnexpectedState);
         }
         for i in 0..shard_set.shards.len() {
-            let fact_num = shard_set.shards[i].lock()?.facts.len();
+            let shard = shard_set.shards[i].lock()?;
+            let fact_num = shard.facts.len();
             if fact_num != state.cfg.shard_size {
                 tracing::error!(
                     "Incorrect number of facts: {:?} (shard {:?}, {:?} shard set)",
@@ -164,6 +163,26 @@ fn check_app_state(state: &AppState) -> Result<(), HealthProblem> {
                 );
                 return Err(HealthProblem::UnexpectedState);
             };
+            match Utc.timestamp_opt(shard.timestamp, 0) {
+                LocalResult::Single(time) => {
+                    if (Utc::now() - time).num_seconds() >= state.cfg.shard_staleness_sec {
+                        tracing::error!(
+                            "Stale shard found (shard {:?}, {:?} shard set)",
+                            i,
+                            shard_set.animal
+                        );
+                        return Err(HealthProblem::StaleShard);
+                    };
+                }
+                _ => {
+                    tracing::error!(
+                        "Invalid timestamp found (shard {:?}, {:?} shard set)",
+                        i,
+                        shard_set.animal
+                    );
+                    return Err(HealthProblem::UnexpectedState);
+                }
+            }
         }
     }
     Ok(())
@@ -206,6 +225,7 @@ mod test {
             shard_num: 2,
             shard_size: 50,
             shard_refresh_sec: 2,
+            shard_staleness_sec: 1,
             verbosity: tracing::Level::TRACE,
             animals,
         };
@@ -289,16 +309,20 @@ mod test {
 
     const UPDATE_NUM: u8 = 10;
 
+    // If need be, one can split this test into fast (without staleness checks and sleeping)
+    // and slow versions.
     #[tokio::test]
     async fn test_shard_refreshing() {
         let animals = vec![Animal::Cat];
         let animal_set: HashSet<_> = animals.iter().map(|a| a.to_string()).collect();
         let (server, state) = set_up_test_server(get_test_config(animals)).await;
+
         for _ in 0..UPDATE_NUM {
-            get_fact(&server, &animal_set).await;
-            get_health(&server).await;
             get_animal_facts(&state).await.unwrap();
             get_health(&server).await;
+            get_fact(&server, &animal_set).await;
+            get_health(&server).await;
+            sleep(Duration::from_secs(state.cfg.shard_staleness_sec as u64)).await;
         }
     }
 }

@@ -38,7 +38,7 @@ impl IntoResponse for AppError {
 pub enum HealthProblem {
     UnexpectedState,
     PoisonedShard,
-    // TODO StaleShards,
+    StaleShard,
 }
 
 impl<'a> From<PoisonedShard<'a>> for HealthProblem {

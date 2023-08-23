@@ -25,6 +25,10 @@ pub struct ServerConfig {
     #[arg(long, default_value_t = 2)]
     pub shard_refresh_sec: u64,
 
+    /// Maximal normal age of a shard (sec)
+    #[arg(long, default_value_t = 10)]
+    pub shard_staleness_sec: i64,
+
     #[arg(short, long, default_value_t = tracing::Level::INFO)]
     pub verbosity: tracing::Level,
 
