@@ -32,3 +32,15 @@ impl IntoResponse for AppError {
         StatusCode::INTERNAL_SERVER_ERROR.into_response()
     }
 }
+
+pub enum HealthProblem {
+    UnexpectedState,
+    // TODO PoisonedShard,
+    // TODO StaleShards,
+}
+
+impl IntoResponse for HealthProblem {
+    fn into_response(self) -> axum::response::Response {
+        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+    }
+}

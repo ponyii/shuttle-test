@@ -1,4 +1,4 @@
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use chrono::{offset::Local, DateTime};
 use clap::Parser;
 use rand::seq::SliceRandom;
@@ -12,7 +12,7 @@ use tracing_subscriber;
 
 use animals::{fetch_raw_facts, validate_batch, Animal};
 use config::ServerConfig;
-use errors::AppError;
+use errors::{AppError, HealthProblem};
 
 pub mod animals;
 pub mod config;
@@ -98,7 +98,10 @@ async fn main() -> Result<(), AppError> {
     let socket_addr = format!("0.0.0.0:{}", state.cfg.port)
         .parse()
         .expect("Unable to parse socket address");
-    let app = Router::new().route("/fact", get(fact)).with_state(state);
+    let app = Router::new()
+        .route("/fact", get(fact))
+        .route("/health", get(health))
+        .with_state(state);
     axum::Server::bind(&socket_addr)
         .serve(app.into_make_service())
         .await
@@ -121,6 +124,45 @@ async fn fact(State(state): State<AppState>) -> Result<Json<HashMap<String, Stri
         ("animal".to_string(), shard_set.animal.to_string()),
         ("fact".to_string(), result.clone()),
     ])))
+}
+
+// Health check is accessible to anyone, hence it doesn't return anything but a status code;
+// see logs for diagnostics.
+async fn health(State(state): State<AppState>) -> Result<StatusCode, HealthProblem> {
+    // TODO: Cache-Control: no-cache
+    check_app_state(&state)?;
+    Ok(StatusCode::OK)
+}
+
+fn check_app_state(state: &AppState) -> Result<(), HealthProblem> {
+    if state.cache.len() != state.cfg.animals.len() {
+        tracing::error!("Unexpected number of shard sets");
+        return Err(HealthProblem::UnexpectedState);
+    }
+    for shard_set in state.cache.as_ref() {
+        let shard_num = shard_set.shards.len();
+        if shard_num != state.cfg.shard_num {
+            tracing::error!(
+                "Incorrect number of shards: {:?} ({:?} shard set)",
+                shard_num,
+                shard_set.animal
+            );
+            return Err(HealthProblem::UnexpectedState);
+        }
+        for i in 0..shard_set.shards.len() {
+            let fact_num = shard_set.shards[i].lock().unwrap().facts.len();
+            if fact_num != state.cfg.shard_size {
+                tracing::error!(
+                    "Incorrect number of facts: {:?} (shard {:?}, {:?} shard set)",
+                    fact_num,
+                    i,
+                    shard_set.animal
+                );
+                return Err(HealthProblem::UnexpectedState);
+            };
+        }
+    }
+    Ok(())
 }
 
 // For the sake of simplicity each shard contains all facts from a signle response.
@@ -165,32 +207,12 @@ mod test {
         };
     }
 
-    fn validate_app_state(state: &AppState) {
-        assert_eq!(
-            state.cache.len(),
-            state.cfg.animals.len(),
-            "each animal should have its own shard set"
-        );
-        for shard_set in state.cache.as_ref() {
-            assert_eq!(
-                shard_set.shards.len(),
-                state.cfg.shard_num,
-                "incorrect number of shards"
-            );
-            for shard in &shard_set.shards {
-                assert_eq!(
-                    shard.lock().unwrap().facts.len(),
-                    state.cfg.shard_size,
-                    "incorrect shard size"
-                );
-            }
-        }
-    }
-
     async fn set_up_test_server(cfg: ServerConfig) -> TestServer {
         let state = init_state(cfg);
         get_animal_facts(&state).await.unwrap();
-        validate_app_state(&state);
+        if let Err(_) = check_app_state(&state) {
+            panic!("Health problem detected");
+        }
         let app = Router::new()
             .route("/fact", get(fact))
             .with_state(state)

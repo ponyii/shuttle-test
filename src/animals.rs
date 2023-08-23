@@ -11,7 +11,7 @@ use serde::Serialize;
 use crate::errors::AppError;
 use crate::Shard;
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy, ValueEnum, Debug)]
 pub enum Animal {
     Dog,
     Cat,
@@ -113,7 +113,7 @@ fn validate_dog_facts(body: String, shard_size: usize) -> Result<Shard, AppError
                 // but it requires some additional logic concerning
                 // minimum shard size and its replentishment.
                 return Err(AppError::InvalidData(
-                    "An empty dog fact received".to_string()
+                    "An empty dog fact received".to_string(),
                 ));
             }
             Ok(Shard::new(batch.facts))
