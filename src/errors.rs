@@ -28,10 +28,7 @@ impl<'a> From<PoisonError<MutexGuard<'a, Shard>>> for AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
-        eprintln!(
-            "This code should have never been reached. Error = {:?}",
-            self
-        );
+        tracing::error!("This code should have never been reached: {:?}", self);
         StatusCode::INTERNAL_SERVER_ERROR.into_response()
     }
 }

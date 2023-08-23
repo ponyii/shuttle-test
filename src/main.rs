@@ -90,7 +90,7 @@ async fn main() -> Result<(), AppError> {
         loop {
             sleep(Duration::from_secs(state_clone.cfg.shard_refresh_sec)).await;
             if let Err(e) = get_animal_facts(&state_clone).await {
-                eprintln!("Fact fetching error: {:?}", e);
+                tracing::error!("Fact fetching error: {:?}", e);
             };
         }
     });
@@ -124,21 +124,16 @@ async fn fact(State(state): State<AppState>) -> Result<Json<HashMap<String, Stri
 }
 
 // For the sake of simplicity each shard contains all facts from a signle response.
-// As both cat- and dog-related APIs are expected to respond with OK, it seems convenient
-// to check response staus codes within this function. Though in future one may move
-// this logic to other functions, only shard filling is essential here.
+// It's also for the sake of simplicity that requests are sent one by one;
+// if need be, the requests to fact providers can become really async, naturally.
 async fn get_animal_facts(state: &AppState) -> Result<(), AppError> {
+    tracing::debug!("Fetching animal facts");
     for shard_set in state.cache.as_ref() {
         let client = reqwest::Client::new();
         let url = url(&shard_set.animal, state.cfg.shard_size);
         for shard in &shard_set.shards {
-            let response = client.get(&url).send().await?;
-            match response.status() {
-                StatusCode::OK => (),
-                code => return Err(AppError::UnexpectedStatusCode(code)),
-            }
             let new_shard = validate_batch(
-                response.text().await?,
+                get_raw_facts(&client, &url).await?,
                 &shard_set.animal,
                 state.cfg.shard_size,
             )?;
@@ -146,4 +141,17 @@ async fn get_animal_facts(state: &AppState) -> Result<(), AppError> {
         }
     }
     Ok(())
+}
+
+// As both cat- and dog-related APIs are expected to respond with OK, it seems convenient to
+// check response staus codes within this animal-agnostic function; can be changed later if need be.
+async fn get_raw_facts(client: &reqwest::Client, url: &String) -> Result<String, AppError> {
+    let response = client.get(url).send().await?;
+    match response.status() {
+        StatusCode::OK => (),
+        // It doesn't seem necessary to implement retries, as these requests
+        // are being re-sent routinely. Just wait for the next run.
+        code => return Err(AppError::UnexpectedStatusCode(code)),
+    };
+    Ok(response.text().await?)
 }

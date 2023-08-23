@@ -37,6 +37,9 @@ pub fn url(animal: &Animal, shard_size: usize) -> String {
 }
 
 pub fn validate_batch(body: String, animal: &Animal, shard_size: usize) -> Result<Shard, AppError> {
+    // One may add other data checks to the validators. E.g. it might make sense
+    // to exclude too long facts from the batches so as to control the amount of
+    // memory used, the fact providers can't be really trusted.
     match animal {
         Animal::Dog => validate_dog_facts(body, shard_size),
         Animal::Cat => validate_cat_facts(body, shard_size),
@@ -63,9 +66,6 @@ fn validate_dog_facts(body: String, shard_size: usize) -> Result<Shard, AppError
                     shard_size
                 )));
             }
-            // One may add other data checks here. E.g. it might make sense to exclude
-            // too long facts from the batch so as to control the amount of memory
-            // used per batch, especially if the fact source can't be trusted.
             Ok(Shard::new(batch.facts))
         }
         Err(e) => Err(AppError::JsonParsingError(e)),
@@ -94,7 +94,7 @@ fn validate_cat_facts(body: String, shard_size: usize) -> Result<Shard, AppError
                     shard_size
                 )));
             }
-            // One may add other data checks here.
+            // One may exclude some facts (e.g. from untrustworthy authors) here.
             Ok(Shard::new(batch.into_iter().map(|f| f.text).collect()))
         }
         Err(e) => Err(AppError::JsonParsingError(e)),
