@@ -207,17 +207,18 @@ mod test {
         };
     }
 
-    async fn set_up_test_server(cfg: ServerConfig) -> TestServer {
+    async fn set_up_test_server(cfg: ServerConfig) -> (TestServer, AppState) {
         let state = init_state(cfg);
         get_animal_facts(&state).await.unwrap();
         if let Err(_) = check_app_state(&state) {
-            panic!("Health problem detected");
+            panic!("Invalid initial state");
         }
         let app = Router::new()
             .route("/fact", get(fact))
-            .with_state(state)
+            .route("/health", get(health))
+            .with_state(state.clone())
             .into_make_service();
-        TestServer::new(app).unwrap()
+        (TestServer::new(app).unwrap(), state)
     }
 
     // In fact this struct is not necessary as
@@ -228,9 +229,13 @@ mod test {
         animal: String,
     }
 
-    fn validate_response(body: &String, expected_animals: &HashSet<String>) {
+    async fn get_fact(server: &TestServer, expected_animals: &HashSet<String>) {
+        let response = server.get("/fact").await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+        let body = response.text();
+
         // Validate expected fields
-        let parsed_response = serde_json::from_str::<RandomFact>(body).unwrap();
+        let parsed_response = serde_json::from_str::<RandomFact>(&body).unwrap();
         assert!(
             expected_animals.contains(&parsed_response.animal),
             "a response includes incorrect animal: {:?}",
@@ -245,7 +250,7 @@ mod test {
 
         // Make sure there are no extra fields.
         // serde_json seems to simply ignore them, see https://github.com/serde-rs/json/issues/581
-        let value: Value = serde_json::from_str(body).unwrap();
+        let value: Value = serde_json::from_str(&body).unwrap();
         let object = value.as_object().unwrap();
         assert_eq!(
             object.keys().len(),
@@ -255,16 +260,19 @@ mod test {
         );
     }
 
+    async fn get_health(server: &TestServer) {
+        let response = server.get("/health").await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+    }
+
     // An alternative to repetitive requests is `rng` mocking.
     const REQUEST_NUM: u8 = 10;
 
     async fn tets_api_inner(animals: Vec<Animal>) {
         let animal_set: HashSet<_> = animals.iter().map(|a| a.to_string()).collect();
-        let server = set_up_test_server(get_test_config(animals)).await;
+        let (server, _) = set_up_test_server(get_test_config(animals)).await;
         for _ in 0..REQUEST_NUM {
-            let response = server.get("/fact").await;
-            assert_eq!(response.status_code(), StatusCode::OK);
-            validate_response(&response.text(), &animal_set);
+            get_fact(&server, &animal_set).await;
         }
     }
 
@@ -273,5 +281,20 @@ mod test {
         tets_api_inner(vec![Animal::Cat]).await;
         tets_api_inner(vec![Animal::Dog]).await;
         tets_api_inner(vec![Animal::Cat, Animal::Dog]).await;
+    }
+
+    const UPDATE_NUM: u8 = 10;
+
+    #[tokio::test]
+    async fn test_shard_refreshing() {
+        let animals = vec![Animal::Cat];
+        let animal_set: HashSet<_> = animals.iter().map(|a| a.to_string()).collect();
+        let (server, state) = set_up_test_server(get_test_config(animals)).await;
+        for _ in 0..UPDATE_NUM {
+            get_fact(&server, &animal_set).await;
+            get_health(&server).await;
+            get_animal_facts(&state).await.unwrap();
+            get_health(&server).await;
+        }
     }
 }
