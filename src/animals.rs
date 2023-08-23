@@ -79,8 +79,8 @@ pub async fn fetch_raw_facts(
     shard_size: usize,
 ) -> Result<String, AppError> {
     match animal {
-        // All the fake raw facts should be valid.
-        // Invalid raw facts can be fed directly to validators for the sake of testing.
+        // All the fake raw facts generated here should be valid, as
+        // invalid fake raw facts can be fed directly into validators.
         Animal::Dog => Ok(fake_raw_dog_facts(shard_size)),
         Animal::Cat => Ok(fake_raw_cat_facts(shard_size)),
     }
@@ -98,7 +98,7 @@ fn validate_dog_facts(body: String, shard_size: usize) -> Result<Shard, AppError
         Ok(batch) => {
             if !batch.success {
                 return Err(AppError::InvalidData(
-                    "The 'success' flag is false".to_string(),
+                    "Upstream API reported error".to_string(),
                 ));
             }
             if batch.facts.len() != shard_size {
@@ -111,7 +111,7 @@ fn validate_dog_facts(body: String, shard_size: usize) -> Result<Shard, AppError
             if batch.facts.contains(&String::from("")) {
                 // Such facts could just have been excluded,
                 // but it requires some additional logic concerning
-                // minimum shard size and its replentishment.
+                // minimum shard size and its replenishment.
                 return Err(AppError::InvalidData(
                     "An empty dog fact received".to_string(),
                 ));
@@ -131,17 +131,12 @@ fn fake_raw_dog_facts(shard_size: usize) -> String {
     serde_json::to_string(&batch).unwrap()
 }
 
-// Optional fields are omitted; some irrelevant ones could have been
-// check more thoroughly (e.g. the `updatedAt` isn't just a string),
-// but it doesn't seem usefull.
+// Irrelevent fields are omitted, checking them doesn't seem useful.
+// They can be added later for the sake of fact filtering.
 #[derive(Deserialize, Debug)]
 #[cfg_attr(test, derive(Serialize, Clone))]
-#[allow(non_snake_case, dead_code)]
 struct CatFact {
-    _id: String,
     text: String,
-    updatedAt: String,
-    deleted: bool,
 }
 
 fn validate_cat_facts(body: String, shard_size: usize) -> Result<Shard, AppError> {
@@ -164,10 +159,7 @@ fn validate_cat_facts(body: String, shard_size: usize) -> Result<Shard, AppError
 #[cfg(test)]
 fn fake_raw_cat_facts(shard_size: usize) -> String {
     let fact = CatFact {
-        _id: "fake it".into(),
         text: "a cat fact".into(),
-        updatedAt: "timestamp".into(),
-        deleted: false,
     };
     let batch = vec![fact; shard_size];
     serde_json::to_string(&batch).unwrap()

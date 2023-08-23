@@ -43,7 +43,7 @@ pub enum HealthProblem {
 
 impl<'a> From<PoisonedShard<'a>> for HealthProblem {
     fn from(_: PoisonedShard<'a>) -> Self {
-        tracing::error!("A poisoned shard foun during health check");
+        tracing::error!("A poisoned shard found during health check");
         Self::PoisonedShard
     }
 }

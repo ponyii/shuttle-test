@@ -36,10 +36,7 @@ impl Shard {
 
 struct ShardSet {
     animal: Animal,
-    // Obviously, `Mutex` is not oblifatory to work with the cached facts; sharding is also optional.
-    // The alternative I find the most natural is the usage of `tokio::sync::watch`
-    // with the receivers in the AppState and the producer in the fact-requesting task;
-    // however, I don't really feel like dealing with the RW-locks `watch` uses under the hood.
+    // On the alternatives of the sharded `Mutex` see README.md
     shards: Vec<Mutex<Shard>>,
 }
 
@@ -81,13 +78,13 @@ async fn main() -> Result<(), AppError> {
     // it can't start unless they all have responded correctly.
     // Optionally, one could exclude the species whose fact providers are unavailable,
     // and keep the server running if at least one species' API responded correctly.
-    get_animal_facts(&state).await?;
+    refresh_shards(&state).await?;
 
     let state_clone = state.clone();
     task::spawn(async move {
         loop {
             sleep(Duration::from_secs(state_clone.cfg.shard_refresh_sec)).await;
-            if let Err(e) = get_animal_facts(&state_clone).await {
+            if let Err(e) = refresh_shards(&state_clone).await {
                 tracing::error!("Fact fetching error: {:?}", e);
             };
         }
@@ -109,7 +106,7 @@ async fn main() -> Result<(), AppError> {
 }
 
 // I assume it's OK to return a fact without checking if it's "fresh";
-// this policy allows the server to keep runnig in case a source of facts
+// this policy allows the server to keep runnig in case a fact provider
 // is temporary unavailable. Naturally, this check could have been performed and
 // a special "no fresh animal facts" error message could have been added.
 async fn fact(State(state): State<AppState>) -> Result<Json<HashMap<String, String>>, AppError> {
@@ -191,10 +188,10 @@ fn check_app_state(state: &AppState) -> Result<(), HealthProblem> {
 // For the sake of simplicity each shard contains all facts from a signle response.
 // It's also for the sake of simplicity that requests are sent one by one;
 // if need be, the requests to fact providers can become really async, naturally.
-async fn get_animal_facts(state: &AppState) -> Result<(), AppError> {
+async fn refresh_shards(state: &AppState) -> Result<(), AppError> {
     tracing::debug!("Fetching animal facts");
+    let client = reqwest::Client::new();
     for shard_set in state.cache.as_ref() {
-        let client = reqwest::Client::new();
         for shard in &shard_set.shards {
             let new_shard = validate_batch(
                 fetch_raw_facts(&client, &shard_set.animal, state.cfg.shard_size).await?,
@@ -233,7 +230,7 @@ mod test {
 
     async fn set_up_test_server(cfg: ServerConfig) -> (TestServer, AppState) {
         let state = init_state(cfg);
-        get_animal_facts(&state).await.unwrap();
+        refresh_shards(&state).await.unwrap();
         if let Err(_) = check_app_state(&state) {
             panic!("Invalid initial state");
         }
@@ -262,13 +259,13 @@ mod test {
         let parsed_response = serde_json::from_str::<RandomFact>(&body).unwrap();
         assert!(
             expected_animals.contains(&parsed_response.animal),
-            "a response includes incorrect animal: {:?}",
+            "Incorrect animal in the response: {:?}",
             parsed_response
         );
         // Currrently all we know is that each fact is a string, but further validation can be added later
         assert!(
             parsed_response.fact.len() > 0,
-            "a response includes incorrect fact: {:?}",
+            "Incorrect fact in the response: {:?}",
             parsed_response
         );
 
@@ -279,7 +276,7 @@ mod test {
         assert_eq!(
             object.keys().len(),
             2,
-            "a response includes extra fields: {:?}",
+            "Extra fields in the response: {:?}",
             value
         );
     }
@@ -318,7 +315,7 @@ mod test {
         let (server, state) = set_up_test_server(get_test_config(animals)).await;
 
         for _ in 0..UPDATE_NUM {
-            get_animal_facts(&state).await.unwrap();
+            refresh_shards(&state).await.unwrap();
             get_health(&server).await;
             get_fact(&server, &animal_set).await;
             get_health(&server).await;
