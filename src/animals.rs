@@ -100,12 +100,21 @@ fn validate_dog_facts(body: String, shard_size: usize) -> Result<Shard, AppError
                 return Err(AppError::InvalidData(
                     "The 'success' flag is false".to_string(),
                 ));
-            } else if batch.facts.len() != shard_size {
+            }
+            if batch.facts.len() != shard_size {
                 return Err(AppError::InvalidData(format!(
                     "Unexpected number of dog facts received: {} instead of {}",
                     batch.facts.len(),
                     shard_size
                 )));
+            }
+            if batch.facts.contains(&String::from("")) {
+                // Such facts could just have been excluded,
+                // but it requires some additional logic concerning
+                // minimum shard size and its replentishment.
+                return Err(AppError::InvalidData(
+                    "An empty dog fact received".to_string()
+                ));
             }
             Ok(Shard::new(batch.facts))
         }
