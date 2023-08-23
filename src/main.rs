@@ -1,4 +1,4 @@
-use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
+use axum::{extract::State, routing::get, Json, Router};
 use chrono::{offset::Local, DateTime};
 use clap::Parser;
 use rand::seq::SliceRandom;
@@ -10,7 +10,7 @@ use tokio::{
 };
 use tracing_subscriber;
 
-use animals::{url, validate_batch, Animal};
+use animals::{fetch_raw_facts, validate_batch, Animal};
 use config::ServerConfig;
 use errors::AppError;
 
@@ -130,10 +130,9 @@ async fn get_animal_facts(state: &AppState) -> Result<(), AppError> {
     tracing::debug!("Fetching animal facts");
     for shard_set in state.cache.as_ref() {
         let client = reqwest::Client::new();
-        let url = url(&shard_set.animal, state.cfg.shard_size);
         for shard in &shard_set.shards {
             let new_shard = validate_batch(
-                get_raw_facts(&client, &url).await?,
+                fetch_raw_facts(&client, &shard_set.animal, state.cfg.shard_size).await?,
                 &shard_set.animal,
                 state.cfg.shard_size,
             )?;
@@ -143,25 +142,13 @@ async fn get_animal_facts(state: &AppState) -> Result<(), AppError> {
     Ok(())
 }
 
-// As both cat- and dog-related APIs are expected to respond with OK, it seems convenient to
-// check response staus codes within this animal-agnostic function; can be changed later if need be.
-async fn get_raw_facts(client: &reqwest::Client, url: &String) -> Result<String, AppError> {
-    let response = client.get(url).send().await?;
-    match response.status() {
-        StatusCode::OK => (),
-        // It doesn't seem necessary to implement retries, as these requests
-        // are being re-sent routinely. Just wait for the next run.
-        code => return Err(AppError::UnexpectedStatusCode(code)),
-    };
-    Ok(response.text().await?)
-}
-
 // Due to lack of time, I have to limit myself to basic tests.
 // Ideally, fact validators deserve thorough testing as they work with third-party data.
 #[cfg(test)]
 mod test {
     use crate::*;
 
+    use axum::http::StatusCode;
     use axum_test::TestServer;
     use serde::Deserialize;
     use serde_json::Value;
@@ -175,15 +162,27 @@ mod test {
             shard_refresh_sec: 2,
             verbosity: tracing::Level::TRACE,
             animals,
-        }
+        };
     }
 
     fn validate_app_state(state: &AppState) {
-        assert_eq!(state.cache.len(), state.cfg.animals.len(), "each animal should have its own shard set");
+        assert_eq!(
+            state.cache.len(),
+            state.cfg.animals.len(),
+            "each animal should have its own shard set"
+        );
         for shard_set in state.cache.as_ref() {
-            assert_eq!(shard_set.shards.len(), state.cfg.shard_num, "incorrect number of shards");
+            assert_eq!(
+                shard_set.shards.len(),
+                state.cfg.shard_num,
+                "incorrect number of shards"
+            );
             for shard in &shard_set.shards {
-                assert_eq!(shard.lock().unwrap().facts.len(), state.cfg.shard_size, "incorrect shard size");
+                assert_eq!(
+                    shard.lock().unwrap().facts.len(),
+                    state.cfg.shard_size,
+                    "incorrect shard size"
+                );
             }
         }
     }
@@ -210,15 +209,28 @@ mod test {
     fn validate_response(body: &String, expected_animals: &HashSet<String>) {
         // Validate expected fields
         let parsed_response = serde_json::from_str::<RandomFact>(body).unwrap();
-        assert!(expected_animals.contains(&parsed_response.animal), "a response includes incorrect animal: {:?}", parsed_response);
+        assert!(
+            expected_animals.contains(&parsed_response.animal),
+            "a response includes incorrect animal: {:?}",
+            parsed_response
+        );
         // Currrently all we know is that each fact is a string, but further validation can be added later
-        assert!(parsed_response.fact.len() > 0, "a response includes incorrect fact: {:?}", parsed_response);
+        assert!(
+            parsed_response.fact.len() > 0,
+            "a response includes incorrect fact: {:?}",
+            parsed_response
+        );
 
         // Make sure there are no extra fields.
         // serde_json seems to simply ignore them, see https://github.com/serde-rs/json/issues/581
         let value: Value = serde_json::from_str(body).unwrap();
         let object = value.as_object().unwrap();
-        assert_eq!(object.keys().len(), 2, "a response includes extra fields: {:?}", value);
+        assert_eq!(
+            object.keys().len(),
+            2,
+            "a response includes extra fields: {:?}",
+            value
+        );
     }
 
     // An alternative to repetitive requests is `rng` mocking.
@@ -236,8 +248,8 @@ mod test {
 
     #[tokio::test]
     async fn test_api() {
-        tets_api_inner(vec!(Animal::Cat)).await;
-        tets_api_inner(vec!(Animal::Dog)).await;
-        tets_api_inner(vec!(Animal::Cat, Animal::Dog)).await;
+        tets_api_inner(vec![Animal::Cat]).await;
+        tets_api_inner(vec![Animal::Dog]).await;
+        tets_api_inner(vec![Animal::Cat, Animal::Dog]).await;
     }
 }
