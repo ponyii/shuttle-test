@@ -1,4 +1,4 @@
-use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
+use axum::{extract::State, http::StatusCode, http::HeaderMap, routing::get, Json, Router};
 use chrono::{offset::Local, DateTime};
 use clap::Parser;
 use rand::seq::SliceRandom;
@@ -128,10 +128,14 @@ async fn fact(State(state): State<AppState>) -> Result<Json<HashMap<String, Stri
 
 // Health check is accessible to anyone, hence it doesn't return anything but a status code;
 // see logs for diagnostics.
-async fn health(State(state): State<AppState>) -> Result<StatusCode, HealthProblem> {
-    // TODO: Cache-Control: no-cache
-    check_app_state(&state)?;
-    Ok(StatusCode::OK)
+async fn health(State(state): State<AppState>) -> (StatusCode, HeaderMap) {
+    let mut headers = HeaderMap::new();
+    headers.insert("Cache-Control", "no-cache".parse().unwrap());
+
+    if let Err(_) = check_app_state(&state) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, headers);
+    }
+    (StatusCode::OK, headers)
 }
 
 fn check_app_state(state: &AppState) -> Result<(), HealthProblem> {
@@ -150,7 +154,7 @@ fn check_app_state(state: &AppState) -> Result<(), HealthProblem> {
             return Err(HealthProblem::UnexpectedState);
         }
         for i in 0..shard_set.shards.len() {
-            let fact_num = shard_set.shards[i].lock().unwrap().facts.len();
+            let fact_num = shard_set.shards[i].lock()?.facts.len();
             if fact_num != state.cfg.shard_size {
                 tracing::error!(
                     "Incorrect number of facts: {:?} (shard {:?}, {:?} shard set)",

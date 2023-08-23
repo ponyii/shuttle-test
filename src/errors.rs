@@ -4,6 +4,8 @@ use std::sync::{MutexGuard, PoisonError};
 
 use crate::Shard;
 
+type PoisonedShard<'a> = PoisonError<MutexGuard<'a, Shard>>;
+
 #[derive(Debug)]
 pub enum AppError {
     RequestError(reqwest::Error),
@@ -20,8 +22,8 @@ impl From<reqwest::Error> for AppError {
     }
 }
 
-impl<'a> From<PoisonError<MutexGuard<'a, Shard>>> for AppError {
-    fn from(_: PoisonError<MutexGuard<'a, Shard>>) -> Self {
+impl<'a> From<PoisonedShard<'a>> for AppError {
+    fn from(_: PoisonedShard<'a>) -> Self {
         Self::PoisonedShard
     }
 }
@@ -35,12 +37,13 @@ impl IntoResponse for AppError {
 
 pub enum HealthProblem {
     UnexpectedState,
-    // TODO PoisonedShard,
+    PoisonedShard,
     // TODO StaleShards,
 }
 
-impl IntoResponse for HealthProblem {
-    fn into_response(self) -> axum::response::Response {
-        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+impl<'a> From<PoisonedShard<'a>> for HealthProblem {
+    fn from(_: PoisonedShard<'a>) -> Self {
+        tracing::error!("A poisoned shard foun during health check");
+        Self::PoisonedShard
     }
 }
