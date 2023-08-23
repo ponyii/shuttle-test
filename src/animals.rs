@@ -43,13 +43,27 @@ pub fn url(animal: &Animal, shard_size: usize) -> String {
 // It could have been a method of the `Animal` trait implemented for both species.
 // As there are not many sepcies-specific parameters, I decided not to create a separate struct for each.
 pub fn validate_batch(body: String, animal: &Animal, shard_size: usize) -> Result<Shard, AppError> {
-    match animal {
-        // One may add other data checks to the validators. E.g. it might make sense
-        // to exclude too long facts from the batches so as to control the amount of
-        // memory used, the fact providers can't be really trusted.
-        Animal::Dog => validate_dog_facts(body, shard_size),
-        Animal::Cat => validate_cat_facts(body, shard_size),
-    }
+    let shard = match animal {
+        Animal::Dog => validate_dog_facts(body, shard_size)?,
+        Animal::Cat => validate_cat_facts(body, shard_size)?,
+    };
+    validate_shard(shard, animal)
+}
+
+// Animal-agnostic fact validation. Almost empty now, but more checks can be added later.
+pub fn validate_shard(shard: Shard, animal: &Animal) -> Result<Shard, AppError> {
+    if shard.facts.contains(&String::from("")) {
+        // Such facts could just have been excluded, but it requires some
+        // additional logic concerning minimum shard size and its replenishment.
+        // Currently this code just helps to notice empty facts in responses
+        // (and it hasn't noticed any such fact yet).
+        return Err(AppError::InvalidData(
+            format!("An empty {:?} fact received", animal)
+        ));
+    };
+    // It might make sense to exclude too long facts from the batches so as
+    // to control the amount of memory used, the fact providers can't be really trusted.
+    Ok(shard)
 }
 
 #[cfg(not(test))]
@@ -107,14 +121,6 @@ fn validate_dog_facts(body: String, shard_size: usize) -> Result<Shard, AppError
                     batch.facts.len(),
                     shard_size
                 )));
-            }
-            if batch.facts.contains(&String::from("")) {
-                // Such facts could just have been excluded,
-                // but it requires some additional logic concerning
-                // minimum shard size and its replenishment.
-                return Err(AppError::InvalidData(
-                    "An empty dog fact received".to_string(),
-                ));
             }
             Ok(Shard::new(batch.facts))
         }
