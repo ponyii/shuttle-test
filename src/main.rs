@@ -224,9 +224,7 @@ mod test {
     // An alternative to repetitive requests is `rng` mocking.
     const REQUEST_NUM: u8 = 10;
 
-    #[tokio::test]
-    async fn test_api() {
-        let animals = vec!(Animal::Dog, Animal::Cat);  // TODO: parametrize
+    async fn tets_api_inner(animals: Vec<Animal>) {
         let animal_set: HashSet<_> = animals.iter().map(|a| a.to_string()).collect();
         let server = set_up_test_server(get_test_config(animals)).await;
         for _ in 0..REQUEST_NUM {
@@ -234,5 +232,12 @@ mod test {
             assert_eq!(response.status_code(), StatusCode::OK);
             validate_response(&response.text(), &animal_set);
         }
+    }
+
+    #[tokio::test]
+    async fn test_api() {
+        tets_api_inner(vec!(Animal::Cat)).await;
+        tets_api_inner(vec!(Animal::Dog)).await;
+        tets_api_inner(vec!(Animal::Cat, Animal::Dog)).await;
     }
 }

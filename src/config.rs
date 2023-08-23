@@ -20,6 +20,7 @@ pub struct ServerConfig {
     #[arg(long, default_value_t = 50, value_parser = validate_shard_size)]
     pub shard_size: usize,
 
+    // The time of refreshing itself is NOT included
     /// Frequency of shard refreshing (sec)
     #[arg(long, default_value_t = 2)]
     pub shard_refresh_sec: u64,
